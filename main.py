@@ -1,12 +1,4 @@
 import os
-
-production = False
-try:
-    import uvicorn
-except ImportError:
-    production = True
-
-from dotenv import load_dotenv
 import openai
 from fastapi import FastAPI, HTTPException, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,10 +7,14 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.security import APIKeyHeader, APIKeyQuery
 from pydantic import BaseModel
 from mangum import Mangum
+from pinecone import Pinecone, ServerlessSpec
+import numpy as np
+from dotenv import load_dotenv
 
-# Load environment variables, if in dev env
-# if not production:
+# Load environment variables
 load_dotenv()
+
+# Environment configuration
 access_token = os.getenv("OPENAI_API_KEY", "")
 if not access_token:
     raise KeyError("OPENAI_API_KEY not found in environment.")
@@ -28,24 +24,32 @@ api_key = os.getenv("ACCEPTED_API_KEY", "")
 if not api_key:
     raise KeyError("ACCEPTED_API_KEY not found in environment.")
 
-EXCLUDED_CHATS = ["image", "info"]
-INITIAL_CHATLOG = [
-    {"role": "system", "content": "You are a helpful assistant"},
-    {
-        "role": "info",
-        "content": (
-            "Hello!\n\nI'm a personal assistant chatbot. I will respond as"
-            " best I can to any messages you send me.\n\nI can also generate"
-            " images based on a prompt you send using '/image ' followed by"
-            " the prompt.\n\nHow may I assist you today?"
-        ),
-    },
-]
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
+PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "")
+if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
+    raise KeyError("PINECONE_API_KEY or PINECONE_ENVIRONMENT not found in environment.")
 
-# FastAPI app
+# Initialize Pinecone client
+pc = Pinecone(api_key=PINECONE_API_KEY)
+
+index_name = "chatbot-memory"  # You can choose a custom name for the Pinecone index
+
+# Check if the index exists, create it if not
+if index_name not in pc.list_indexes().names():
+    pc.create_index(
+        name=index_name,
+        dimension=1536,  # OpenAI's embedding dimension size
+        metric='euclidean',
+        spec=ServerlessSpec(cloud='aws', region='us-east-1')
+    )
+
+# Create an Index object
+index = pc.Index(index_name)
+
+# FastAPI app setup
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-# Create handler for AWS
+# Create handler for AWS Lambda
 handler = Mangum(app)
 
 origins = [
@@ -67,76 +71,25 @@ app.add_middleware(
 api_key_query = APIKeyQuery(name="api-key", auto_error=False)
 api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
+EXCLUDED_CHATS = ["image", "info"]
+INITIAL_CHATLOG = [
+    {"role": "system", "content": "You are a helpful assistant"},
+    {
+        "role": "info",
+        "content": (
+            "Hello!\n\nI'm a personal assistant chatbot. I will respond as"
+            " best I can to any messages you send me.\n\nI can also generate"
+            " images based on a prompt you send using '/image ' followed by"
+            " the prompt.\n\nHow may I assist you today?"
+        ),
+    },
+]
 
 # Log of all user, system, and assistant prompts
 chat_log = list(INITIAL_CHATLOG)
 
-# Canned chat log for testing purposes, to pad the chat history
-# chat_log.append(
-#     {
-#         "role": "user",
-#         "content": "What was the most popular Christmas gift in 1992?",
-#     }
-# )
-# chat_log.append(
-#     {
-#         "role": "assistant",
-#         "content": (
-#             "In 1992, one of the most popular Christmas gifts was the Super"
-#             " Nintendo Entertainment System (SNES). This gaming console was"
-#             " highly sought after and came with popular games like Super Mario"
-#             " World and The Legend of Zelda: A Link to the Past."
-#         ),
-#     }
-# )
-# chat_log.append({"role": "user", "content": "What about the second?"})
-# chat_log.append(
-#     {
-#         "role": "assistant",
-#         "content": (
-#             "The second most popular Christmas gift in 1992 was the Talkboy,"
-#             " which gained immense popularity due to its appearance in the"
-#             " movie Home Alone 2: Lost in New York. The Talkboy was a handheld"
-#             " cassette recorder and player that allowed users to record and"
-#             " modify their voices. Its inclusion in the movie led to a surge"
-#             " in demand and made it a sought-after gift during that holiday"
-#             " season."
-#         ),
-#     }
-# )
-# chat_log.append(
-#     {
-#         "role": "user",
-#         "content": "What year did the first movie in that franchise come out?",
-#     }
-# )
-# chat_log.append(
-#     {
-#         "role": "assistant",
-#         "content": (
-#             "The first movie in the Home Alone franchise, simply titled Home"
-#             " Alone, was released in 1990. It was directed by Chris Columbus"
-#             " and starred Macaulay Culkin as Kevin McCallister, a young boy"
-#             " who is accidentally left behind when his family goes on vacation"
-#             " during Christmas. The film became a massive success and remains"
-#             " a beloved holiday classic."
-#         ),
-#     }
-# )
-# chat_log.append(
-#     {"role": "user", "content": "What day was that released in theaters?"}
-# )
-# chat_log.append(
-#     {
-#         "role": "assistant",
-#         "content": "Home Alone was released in theaters on November 16, 1990.",
-#     }
-# )
-
-
 class UserInputIn(BaseModel):
     prompt: str
-
 
 def get_api_key(
     api_key_query: str = Security(api_key_query),
@@ -151,28 +104,27 @@ def get_api_key(
         detail="Invalid or missing API Key",
     )
 
-
 @app.get("/docs", include_in_schema=False)
 async def get_documentation(api_key: str = Security(get_api_key)):
     openapi_url = "/openapi.json"
     if api_key:
         openapi_url += f"?api-key={api_key}"
-    print(openapi_url)
-
     return get_swagger_ui_html(openapi_url=openapi_url, title="docs")
-
 
 @app.get("/openapi.json", include_in_schema=False)
 async def openapi(api_key: str = Security(get_api_key)):
     return get_openapi(title="FastAPI", version="0.1.0", routes=app.routes)
 
-
 @app.get("/")
 async def get_chat_logs():
     global chat_log
-
     return chat_log
 
+# Function to generate vector embeddings
+def generate_embeddings(text: str) -> list:
+    response = openai.Embedding.create(model="text-embedding-ada-002", input=text)
+    embeddings = response["data"][0]["embedding"]
+    return embeddings
 
 @app.post("/")
 async def chat(
@@ -183,14 +135,31 @@ async def chat(
     global chat_log
 
     # Append user input to chat log
-    chat_log.append({"role": "user", "content": user_input.prompt})
+    user_message = user_input.prompt
+    chat_log.append({"role": "user", "content": user_message})
+
+    # Generate embeddings for the user message
+    user_embeddings = generate_embeddings(user_message)
+
+    # Upsert the data (user_embeddings) into the Pinecone index
+    vector_id = str(len(chat_log))  # Unique ID for each message
+    index.upsert([(vector_id, user_embeddings, {"content": user_message})])
+
+    # Corrected query with keyword arguments
+    query_results = index.query(vector=user_embeddings, top_k=5, include_metadata=True)
+    
+    relevant_memory = ""
+    for match in query_results["matches"]:
+        relevant_memory += match["metadata"]["content"] + "\n"
+
+    # Create AI prompt combining relevant memory and new input
     ai_prompts = [
-        log_entry
-        for log_entry in chat_log
-        if not log_entry.get("role") in EXCLUDED_CHATS
+        {"role": "system", "content": "You are a helpful assistant"},
+        {"role": "user", "content": user_message},
+        {"role": "assistant", "content": relevant_memory}
     ]
 
-    # Make call to OpenAI API
+    # Make call to OpenAI API for the response
     response = openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=ai_prompts,
@@ -206,50 +175,12 @@ async def chat(
 
     return chat_log
 
-
-@app.post("/i")
-async def chat(
-    request: Request,
-    user_input: UserInputIn,
-    api_key: str = Security(get_api_key),
-):
-    global chat_log
-
-    # Append user input to chat log
-    chat_log.append({"role": "user", "content": user_input.prompt})
-    chat_log.append(
-        {
-            "role": "info",
-            "content": (
-                "Please wait a moment while I generate that image for you..."
-            ),
-        },
-    )
-
-    # Make call to OpenAI API
-    response = openai.Image.create(
-        prompt=user_input.prompt, n=1, size="512x512"
-    )
-
-    # Get response from OpenAI API
-    bot_response = response.get("data", [])[0].get("url")
-
-    # Append assistant response to chat log
-    chat_log.append({"role": "image", "content": bot_response})
-
-    return bot_response
-
-
 @app.delete("/")
 async def clear_chat_log(api_key: str = Security(get_api_key)):
     global chat_log, INITIAL_CHATLOG
-
-    # Re-initialize the chat log
     chat_log = list(INITIAL_CHATLOG)
-
     return chat_log
 
-
 if __name__ == "__main__":
-    if not production:
-        uvicorn.run("main:app", host="127.0.0.1", port=8000)
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8000)
