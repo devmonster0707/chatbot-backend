@@ -1,5 +1,6 @@
 import os
 import openai
+import uuid  # To generate unique user session IDs
 from fastapi import FastAPI, HTTPException, Request, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
@@ -134,6 +135,9 @@ async def chat(
 ):
     global chat_log
 
+    # Generate a unique session ID for the user (this can be passed from the frontend or generated dynamically)
+    user_session_id = str(uuid.uuid4())  # Generate a unique ID for each user
+
     # Append user input to chat log
     user_message = user_input.prompt
     chat_log.append({"role": "user", "content": user_message})
@@ -141,12 +145,16 @@ async def chat(
     # Generate embeddings for the user message
     user_embeddings = generate_embeddings(user_message)
 
-    # Upsert the data (user_embeddings) into the Pinecone index
-    vector_id = str(len(chat_log))  # Unique ID for each message
-    index.upsert([(vector_id, user_embeddings, {"content": user_message})])
+    # Use the user's session ID as the namespace to separate data
+    namespace = user_session_id
 
-    # Corrected query with keyword arguments
-    query_results = index.query(vector=user_embeddings, top_k=5, include_metadata=True)
+    # Upsert the vector embeddings into Pinecone index (storing only embeddings and metadata)
+    vector_id = str(len(chat_log))  # Unique ID for each message
+    # We store only the vector and metadata (raw content of the message)
+    index.upsert([(vector_id, user_embeddings, {"content": user_message})], namespace=namespace)
+
+    # Corrected query with keyword arguments, using the user's session as the namespace
+    query_results = index.query(vector=user_embeddings, top_k=5, include_metadata=True, namespace=namespace)
     
     relevant_memory = ""
     for match in query_results["matches"]:
