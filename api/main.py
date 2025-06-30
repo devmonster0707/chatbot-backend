@@ -162,7 +162,3 @@ async def delete_history(sessionId: str = Query(..., description="Session ID fro
         return list(INITIAL_CHATLOG)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting session history: {str(e)}")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000)
