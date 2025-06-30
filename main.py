@@ -1,11 +1,10 @@
 import os
 import openai
 import uuid  # To generate unique user session IDs
-from fastapi import FastAPI, HTTPException, Request, Security, status
+from fastapi import FastAPI,  Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
-from fastapi.security import APIKeyHeader, APIKeyQuery
 from pydantic import BaseModel
 from mangum import Mangum
 from pinecone import Pinecone, ServerlessSpec
@@ -21,14 +20,9 @@ if not access_token:
     raise KeyError("OPENAI_API_KEY not found in environment.")
 openai.api_key = access_token
 
-api_key = os.getenv("ACCEPTED_API_KEY", "")
-if not api_key:
-    raise KeyError("ACCEPTED_API_KEY not found in environment.")
-
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY", "")
-PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT", "")
-if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
-    raise KeyError("PINECONE_API_KEY or PINECONE_ENVIRONMENT not found in environment.")
+if not PINECONE_API_KEY :
+    raise KeyError("PINECONE_API_KEY not found in environment.")
 
 # Initialize Pinecone client
 pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -54,9 +48,7 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 handler = Mangum(app)
 
 origins = [
-    "http://localhost:8000",
     "http://localhost:3000",
-    "https://ai-chatbot-git-main-nathanrcobb.vercel.app",
     "https://ai-chatbot-five-bice.vercel.app",
 ]
 
@@ -69,8 +61,6 @@ app.add_middleware(
     max_age=3600,
 )
 
-api_key_query = APIKeyQuery(name="api-key", auto_error=False)
-api_key_header = APIKeyHeader(name="x-api-key", auto_error=False)
 
 EXCLUDED_CHATS = ["image", "info"]
 INITIAL_CHATLOG = [
@@ -79,47 +69,21 @@ INITIAL_CHATLOG = [
         "role": "info",
         "content": (
             "Hello!\n\nI'm a personal assistant chatbot. I will respond as"
-            " best I can to any messages you send me.\n\nI can also generate"
-            " images based on a prompt you send using '/image ' followed by"
-            " the prompt.\n\nHow may I assist you today?"
+            " best I can to any messages you send me.\n\nHow may I assist you today?"
         ),
     },
 ]
 
-# Log of all user, system, and assistant prompts
-chat_log = list(INITIAL_CHATLOG)
+
 
 class UserInputIn(BaseModel):
     prompt: str
 
-def get_api_key(
-    api_key_query: str = Security(api_key_query),
-    api_key_header: str = Security(api_key_header),
-) -> str:
-    if api_key_query == api_key:
-        return api_key_query
-    if api_key_header == api_key:
-        return api_key_header
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid or missing API Key",
-    )
 
-@app.get("/docs", include_in_schema=False)
-async def get_documentation(api_key: str = Security(get_api_key)):
-    openapi_url = "/openapi.json"
-    if api_key:
-        openapi_url += f"?api-key={api_key}"
-    return get_swagger_ui_html(openapi_url=openapi_url, title="docs")
-
-@app.get("/openapi.json", include_in_schema=False)
-async def openapi(api_key: str = Security(get_api_key)):
-    return get_openapi(title="FastAPI", version="0.1.0", routes=app.routes)
 
 @app.get("/")
 async def get_chat_logs():
-    global chat_log
-    return chat_log
+    return list(INITIAL_CHATLOG)
 
 # Function to generate vector embeddings
 def generate_embeddings(text: str) -> list:
@@ -131,16 +95,15 @@ def generate_embeddings(text: str) -> list:
 async def chat(
     request: Request,
     user_input: UserInputIn,
-    api_key: str = Security(get_api_key),
+     sessionId: str = Query(..., description="Session ID from the frontend")
 ):
-    global chat_log
+    # global chat_log
 
     # Generate a unique session ID for the user (this can be passed from the frontend or generated dynamically)
-    user_session_id = str(uuid.uuid4())  # Generate a unique ID for each user
+    user_session_id = sessionId  # Generate a unique ID for each user
 
     # Append user input to chat log
     user_message = user_input.prompt
-    chat_log.append({"role": "user", "content": user_message})
 
     # Generate embeddings for the user message
     user_embeddings = generate_embeddings(user_message)
@@ -149,7 +112,7 @@ async def chat(
     namespace = user_session_id
 
     # Upsert the vector embeddings into Pinecone index (storing only embeddings and metadata)
-    vector_id = str(len(chat_log))  # Unique ID for each message
+    vector_id = str(uuid.uuid4())
     # We store only the vector and metadata (raw content of the message)
     index.upsert([(vector_id, user_embeddings, {"content": user_message})], namespace=namespace)
 
@@ -178,16 +141,23 @@ async def chat(
     # Get response from OpenAI API
     bot_response = response.get("choices", [])[0].get("message").get("content")
 
-    # Append assistant response to chat log
-    chat_log.append({"role": "assistant", "content": bot_response})
-
-    return chat_log
+    return {"role": "assistant", "content": bot_response}
 
 @app.delete("/")
-async def clear_chat_log(api_key: str = Security(get_api_key)):
-    global chat_log, INITIAL_CHATLOG
-    chat_log = list(INITIAL_CHATLOG)
-    return chat_log
+async def delete_history(sessionId: str = Query(..., description="Session ID from the frontend")):
+    # Use the session ID passed from the frontend to delete the data
+    namespace = sessionId
+
+    # Check if the index exists
+    if index_name not in pc.list_indexes().names():
+        raise HTTPException(status_code=404, detail="Index not found")
+
+    # Delete all vectors associated with the given session's namespace
+    try:
+        index.delete(delete_all=True, namespace=namespace)
+        return list(INITIAL_CHATLOG)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting session history: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
