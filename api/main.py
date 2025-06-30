@@ -44,10 +44,6 @@ index = pc.Index(index_name)
 # FastAPI app setup
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-@app.get("/")
-async def read_root():
-    return {"message": "Hello, World!"}
-
 # Create handler for AWS Lambda
 handler = Mangum(app)
 

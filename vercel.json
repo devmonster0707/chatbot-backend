@@ -1,4 +1,5 @@
-{  "builds": [
+{
+  "builds": [
     {
       "src": "api/main.py",
       "use": "@vercel/python"
