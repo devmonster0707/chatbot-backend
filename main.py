@@ -166,7 +166,5 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=8000,
-        debug=os.getenv("DEBUG", False),
-        log_level=os.getenv('LOG_LEVEL', "info"),
         proxy_headers=True
     )
