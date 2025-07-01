@@ -1,0 +1,10 @@
+version: 1.0
+runtime: python3
+build:
+  commands:
+    - pip3 install --no-cache-dir -r requirements.txt
+
+run:
+  command: python3 main.py
+  network:
+    port: 8000
