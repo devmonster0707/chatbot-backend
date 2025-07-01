@@ -163,7 +163,7 @@ async def delete_history(sessionId: str = Query(..., description="Session ID fro
 if __name__ == "__main__":
     print("Starting webserver...")
     uvicorn.run(
-        app,
+        "main:app",
         host="0.0.0.0",
         port=8000,
         proxy_headers=True
