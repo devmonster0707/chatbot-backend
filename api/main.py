@@ -44,8 +44,8 @@ index = pc.Index(index_name)
 # FastAPI app setup
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-# Create handler for AWS Lambda
-handler = Mangum(app)
+# # Create handler for AWS Lambda
+# handler = Mangum(app)
 
 origins = [
     "http://localhost:3000",
