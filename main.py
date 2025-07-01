@@ -1,5 +1,6 @@
 import os
 import openai
+import uvicorn
 import uuid  # To generate unique user session IDs
 from fastapi import FastAPI,  Request, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -158,3 +159,14 @@ async def delete_history(sessionId: str = Query(..., description="Session ID fro
         return list(INITIAL_CHATLOG)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting session history: {str(e)}")
+
+if __name__ == "__main__":
+    print("Starting webserver...")
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        debug=os.getenv("DEBUG", False),
+        log_level=os.getenv('LOG_LEVEL', "info"),
+        proxy_headers=True
+    )

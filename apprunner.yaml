@@ -1,0 +1,19 @@
+version: 1.0
+runtime: python3
+build:
+  commands:
+    build:
+      - pip install -r requirements.txt # install dependencies
+
+  env: # define environment variables
+    - name: OPENAI_API_KEY
+      value: "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"
+    - name: PINECONE_API_KEY
+      value: "pcsk_3z8yBV_HH5VH4mrKsDyzamb9wVSC2wsQZM3u9QjbzkomuMhRFG4FB6rCQsdRDmihsq8fsm"
+    - name: PINECONE_ENVIRONMENT
+      value: "us-west1-gcp"
+
+run:
+  command: python main.py # command to run fastapi
+  network:
+    port: 8000 # port AppRunner will expose
